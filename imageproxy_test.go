@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"image"
 	"image/png"
+	"io"
 	"log"
 	"net/http"
 	"net/http/httptest"
@@ -584,4 +585,74 @@ func TestContentTypeMatches(t *testing.T) {
 			t.Errorf("contentTypeMatches(%q, %q) returned %v, want %v", tt.patterns, tt.contentType, got, want)
 		}
 	}
+}
+
+func TestNoValidateTransport_RoundTrip(t *testing.T) {
+	// Create a test server that counts requests
+	requestCount := 0
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		w.Header().Set("Content-Type", "image/jpeg")
+		w.Write([]byte("test image data"))
+	}))
+	defer ts.Close()
+
+	// Create a memory cache
+	cache := make(map[string][]byte)
+	testCache := &testCache{cache: cache}
+
+	// Create the NoValidateTransport
+	transport := &NoValidateTransport{
+		Transport: http.DefaultTransport,
+		Cache:     testCache,
+	}
+
+	// Make first request - should hit the server
+	req1, _ := http.NewRequest("GET", ts.URL+"/test.jpg", nil)
+	resp1, err := transport.RoundTrip(req1)
+	if err != nil {
+		t.Fatalf("First request failed: %v", err)
+	}
+	defer resp1.Body.Close()
+	
+	if requestCount != 1 {
+		t.Errorf("Expected 1 server request, got %d", requestCount)
+	}
+
+	// Make second request - should use cache
+	req2, _ := http.NewRequest("GET", ts.URL+"/test.jpg", nil)
+	resp2, err := transport.RoundTrip(req2)
+	if err != nil {
+		t.Fatalf("Second request failed: %v", err)
+	}
+	defer resp2.Body.Close()
+
+	if requestCount != 1 {
+		t.Errorf("Expected still 1 server request, got %d", requestCount)
+	}
+
+	// Verify response bodies match
+	body1, _ := io.ReadAll(resp1.Body)
+	body2, _ := io.ReadAll(resp2.Body)
+	if !bytes.Equal(body1, body2) {
+		t.Error("Response bodies don't match")
+	}
+}
+
+// testCache is a simple in-memory cache implementation for testing
+type testCache struct {
+	cache map[string][]byte
+}
+
+func (c *testCache) Get(key string) ([]byte, bool) {
+	data, ok := c.cache[key]
+	return data, ok
+}
+
+func (c *testCache) Set(key string, data []byte) {
+	c.cache[key] = data
+}
+
+func (c *testCache) Delete(key string) {
+	delete(c.cache, key)
 }
