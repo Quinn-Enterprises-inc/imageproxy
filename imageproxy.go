@@ -23,7 +23,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/fcjr/aia-transport-go"
 	"github.com/gregjones/httpcache"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -98,12 +97,42 @@ type Proxy struct {
 	CacheMaxAge time.Duration
 }
 
-// NewProxy constructs a new proxy.  The provided http RoundTripper will be
-// used to fetch remote URLs.  If nil is provided, http.DefaultTransport will
-// be used.
+// NoValidateTransport is a caching http.RoundTripper that skips HTTP validation
+// of cached content. If content exists in cache, it is returned without
+// checking with the origin server for updates.
+type NoValidateTransport struct {
+	Transport http.RoundTripper
+	Cache     Cache
+}
+
+func (t *NoValidateTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	// Generate cache key
+	key := req.URL.String()
+	if data, ok := t.Cache.Get(key); ok {
+		// Return cached response without validation
+		buf := bytes.NewBuffer(data)
+		return http.ReadResponse(bufio.NewReader(buf), req)
+	}
+
+	// If not in cache, make the request
+	resp, err := t.Transport.RoundTrip(req)
+	if err != nil {
+		return nil, err
+	}
+
+	// Cache the response
+	var b bytes.Buffer
+	resp.Write(&b)
+	t.Cache.Set(key, b.Bytes())
+
+	// Return a new response from the cached data to avoid body already closed issues
+	return http.ReadResponse(bufio.NewReader(bytes.NewBuffer(b.Bytes())), req)
+}
+
+// NewProxy constructs a new proxy with the specified transport and cache.
 func NewProxy(transport http.RoundTripper, cache Cache) *Proxy {
 	if transport == nil {
-		transport, _ = aia.NewTransport()
+		transport = http.DefaultTransport
 	}
 	if cache == nil {
 		cache = NopCache
@@ -113,19 +142,17 @@ func NewProxy(transport http.RoundTripper, cache Cache) *Proxy {
 		Cache: cache,
 	}
 
+	// Create caching transport that skips validation
+	noValidateTransport := &NoValidateTransport{
+		Transport: transport,
+		Cache:     cache,
+	}
+
 	client := new(http.Client)
-	client.Transport = &httpcache.Transport{
-		Transport: &TransformingTransport{
-			Transport:     transport,
-			CachingClient: client,
-			log: func(format string, v ...interface{}) {
-				if proxy.Verbose {
-					proxy.logf(format, v...)
-				}
-			},
-		},
-		Cache:               cache,
-		MarkCachedResponses: true,
+	client.Transport = &TransformingTransport{
+		Transport:     noValidateTransport,
+		CachingClient: client,
+		log:          proxy.logf,
 	}
 
 	proxy.Client = client
