@@ -108,7 +108,9 @@ type NoValidateTransport struct {
 func (t *NoValidateTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	// Generate cache key
 	key := req.URL.String()
+	log.Printf("cache key: %s\n", key)
 	if data, ok := t.Cache.Get(key); ok {
+		log.Printf("in cache!\n")
 		// Return cached response without validation
 		buf := bytes.NewBuffer(data)
 		return http.ReadResponse(bufio.NewReader(buf), req)
@@ -152,7 +154,7 @@ func NewProxy(transport http.RoundTripper, cache Cache) *Proxy {
 	client.Transport = &TransformingTransport{
 		Transport:     noValidateTransport,
 		CachingClient: client,
-		log:          proxy.logf,
+		log:           proxy.logf,
 	}
 
 	proxy.Client = client
