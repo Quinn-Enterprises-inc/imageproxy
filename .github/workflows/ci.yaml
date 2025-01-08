@@ -35,5 +35,4 @@ jobs:
         with:
           push: true
           tags: |
-            ${{ secrets.IMAGE_REPOSITORY }}:latest
             ${{ secrets.IMAGE_REPOSITORY }}:${{ github.sha }}
